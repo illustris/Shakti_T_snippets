@@ -1,3 +1,5 @@
+DEFS=DEBUG FUNCT
+
 craft: craft.s craft_test.c
 	riscv64-unknown-elf-clang -c craft.s
 	riscv64-unknown-elf-clang -c craft_test.c
@@ -7,8 +9,8 @@ craft: craft.s craft_test.c
 
 safemalloc: craft.s safemalloc.c safemalloc_test.c
 	riscv64-unknown-elf-clang -c craft.s
-	riscv64-unknown-elf-clang -c safemalloc.c -w
-	riscv64-unknown-elf-clang -c safemalloc.c -w -S -o safemalloc.asm
+	riscv64-unknown-elf-clang -c safemalloc.c -w -O3 $(addprefix -D, $(DEFS))
+	riscv64-unknown-elf-clang -c safemalloc.c -w -S -o safemalloc.asm -O3
 	riscv64-unknown-elf-clang -c safemalloc_test.c
 	rm -f ./safemalloc_test.out
 	riscv64-unknown-elf-clang safemalloc_test.o safemalloc.o craft.o -o safemalloc_test.out
