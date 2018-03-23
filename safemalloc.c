@@ -82,6 +82,7 @@ fptr safemalloc(unsigned long s)
 		:);
 	#endif
 
+	// todo: implement inline ASM pointer crafting for release
 	fptr ret = craft(ptr+8, ptr, ptr+s, hash);
 	return ret;
 }
@@ -117,6 +118,11 @@ void safefree(fptr fpr)
 
 fptr saferealloc(volatile register fptr fpr, unsigned long s)
 {
+	void *src, *dst;
+
+	unsigned int old_base = fpr >> 64;
+	unsigned int old_bound = fpr >> 96;
+
 	#ifdef FUNCT
 	validate(fpr);
 	#endif
@@ -128,4 +134,10 @@ fptr saferealloc(volatile register fptr fpr, unsigned long s)
 	#ifdef REL
 	asm("val a0, a1");
 	#endif
+
+	s+=8;
+	fptr new = safemalloc(s);
+	unsigned int new_base = new >> 64;
+	memcpy(new_base+8,old_base+8,old_bound-old_base-8);
+	return new;
 }
