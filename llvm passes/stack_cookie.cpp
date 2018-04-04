@@ -40,21 +40,21 @@ namespace {
 						modified = true;
 
 					}
-					else	// if not first BB
-						for (auto &I : B)	// Iterate over instructions
-							if (auto *op = dyn_cast<ReturnInst>(&I)) {	// If return instruction
 
-								// set up arguments
-								std::vector<Value *> args;
-								args.push_back(st_cook);
-								ArrayRef<Value *> args_ref(args);
+					for (auto &I : B)	// Iterate over instructions
+						if (auto *op = dyn_cast<ReturnInst>(&I)) {	// If return instruction
 
-								// Call hash again to burn cookie
-								IRBuilder<> Builder(&I);
-								Builder.SetInsertPoint(&I);
-								Builder.CreateCall(hash, args_ref,"stack_cookie_burn");
-								modified = true;
-							}
+							// set up arguments
+							std::vector<Value *> args;
+							args.push_back(st_cook);
+							ArrayRef<Value *> args_ref(args);
+
+							// Call hash again to burn cookie
+							IRBuilder<> Builder(&I);
+							Builder.SetInsertPoint(&I);
+							Builder.CreateCall(hash, args_ref,"stack_cookie_burn");
+							modified = true;
+						}
 				}
 			}
 
