@@ -12,6 +12,63 @@
 
 using namespace llvm;
 
+Value* resolveGetElementPtr(GetElementPtrInst *GI,DataLayout *D,LLVMContext &Context) {
+
+	int offset = 0;
+	Value *Offset,*temp;
+	int c = 0;
+
+	//errs() << *GI << "\n" ;
+
+	if(ConstantInt *CI = dyn_cast<ConstantInt>(GI->getOperand(GI->getNumOperands()-1))){ // get the last operand of the getelementptr
+		c = CI->getZExtValue () ;
+	}else{
+		//suppose the last index was not a constant then set 'c' to some special value and get the last operand.
+		c = -999;
+		// Instruction *I = dyn_cast<Instruction>(GI->getOperand(GI->getNumOperands()-1));
+		// Offset = I->getOperand(0);
+		Offset = GI->getOperand(GI->getNumOperands()-1) ;
+	}
+	
+	Type *type = GI->getSourceElementType(); //get the type of getelementptr
+	if(StructType *t = dyn_cast<StructType>(type) ){ //check for struct type
+			
+		const StructLayout *SL = D->getStructLayout(t);
+		offset+= SL->getElementOffset(c);
+
+	}else if(ArrayType *t = dyn_cast<ArrayType>(type) ) {
+
+		if(c==-999){
+			temp= llvm::ConstantInt::get(Type::getInt64Ty(Context), D->getTypeAllocSize(t->getElementType()));
+			IRBuilder<> builder(GI);
+			Offset = builder.CreateBinOp(Instruction::Mul,Offset, temp, "tmp");
+
+		}else
+			offset+=c*D->getTypeAllocSize(t->getElementType()) ; //D->getTypeAllocSize(t)/t->getArrayNumElements();
+				
+	}
+	/*else if(UnionType *t = dyn_cast<ArrayType>(type)){
+		errs() << "inside union \n" ;
+	}
+*/
+
+	else{//basic pointer increment or decrements
+
+		if(c==-999){
+			temp= llvm::ConstantInt::get(Type::getInt64Ty(Context), D->getTypeAllocSize(type));
+			IRBuilder<> builder(GI);
+			Offset = builder.CreateBinOp(Instruction::Mul,Offset, temp, "tmp");
+
+		}else
+			offset+=c*D->getTypeAllocSize(type);
+	}
+
+	if(c!=-999)
+		Offset = llvm::ConstantInt::get(Type::getInt32Ty(Context),offset);
+	
+	return Offset;
+}
+
 namespace {
 	struct cookiePass : public ModulePass {
 		static char ID;
@@ -30,8 +87,54 @@ namespace {
 				CallInst *st_hash;
 		
 				for (auto &B : F) {
-					for (auto &I : B) {
-						if (auto *op = dyn_cast<AllocaInst>(&I)) {
+					//for (auto &I : B) {
+					for(BasicBlock::iterator i = B.begin(), e = B.end(); i != e; ++i) {
+						Instruction *I = dyn_cast<Instruction>(i);
+
+						if (auto *op = dyn_cast<GetElementPtrInst>(I)) {
+							modified=true;
+							Value *offset = resolveGetElementPtr(op,D,Ctx);
+							//errs()<<"\n***\nOFFSET: "<<*offset<<"\n*****\n";
+							ZExtInst *zext_binop = new ZExtInst(offset, Type::getInt128Ty(Ctx), "zextarrayidx", op);
+							BinaryOperator *binop =  BinaryOperator::Create(Instruction::Add, op->getOperand(0), zext_binop , "arrayidx", op);
+							//errs()<<"===============================\n"<<F<<"\n===============================\n";
+							
+							std::stack <User *> users;
+							std::stack <int> pos;
+
+							for (auto &U : op->uses()) {
+								User *user = U.getUser();
+								users.push(user);
+								pos.push(U.getOperandNo());
+								//errs()<<"\n------\n"<<*op<<"\nused at:\n" << *user << "\n----\n" ; 
+							}
+
+							while(users.size())
+						    {
+						    	User *u = users.top();
+						    	users.pop();
+						    	int index = pos.top();
+						    	pos.pop();
+						    	u->setOperand(index, binop);	
+						    }
+
+						    --i;
+						    op->dropAllReferences();
+						    op->removeFromParent();
+						}
+
+						else if (auto *op = dyn_cast<AllocaInst>(I)) {
+							modified=true;
+							if(op->getAllocatedType()->isPointerTy())
+							{
+								op->setAllocatedType(Type::getInt128Ty(Ctx));
+								op->mutateType(Type::getIntNPtrTy(Ctx,128));
+								//errs()<<"\nPointer: "<<*(op->getType())<<"\n";
+								//errs()<<"\nAllocatedtype: "<<*(op->getAllocatedType())<<"\n";
+								
+								//made_fpr=true;
+							}
+
 							if (op->getName() == "stack_cookie")
 							{
 								st_hash = dyn_cast<CallInst>(op->getNextNode());
@@ -39,8 +142,11 @@ namespace {
 								continue;
 							}
 							//errs() << "\n***Found array or struct***\n"<<*op<<"\n";
-							
+							//errs()<<"===============================\n"<<F<<"\n===============================\n";
 							PtrToIntInst *trunc = new PtrToIntInst(op, Type::getInt32Ty(Ctx),"",op->getNextNode());
+							//errs()<<"\n***"<<*(trunc->getOperand(0))<<"***\n";
+							//trunc->setOperand(0,op);
+							//errs()<<"===============================\n"<<F<<"\n===============================\n";
 
 							std::vector<Value *> args;
 							args.push_back(trunc);
@@ -55,17 +161,21 @@ namespace {
 							args.push_back(st_hash);
 							ArrayRef<Value *> args_ref(args);
 
-							IRBuilder<> Builder(&I);
+							IRBuilder<> Builder(I);
 							Builder.SetInsertPoint(trunc->getNextNode());
 							//errs()<<"\nNAME: "<<op->getName()<<"\n";
 							Value *fpr = Builder.CreateCall(craftFunc, args_ref,op->getName()+"fpr");
 
 							bool flag = false;
-							int count = 0;
+							//int count = 0;
 							std::stack <User *> users;
 							std::stack <int> pos;
+
+							//User *ptrtoint;
+							//int ptrtointindex = 0;
+
 							for (auto &U : op->uses()) {
-								count++;
+								//count++;
 								if(!flag) {
 									flag = true;
 									continue;
@@ -78,6 +188,7 @@ namespace {
 								//U->replaceUsesOfWith(op,fpr);
 								//user->setOperand(U.getOperandNo(), fpr); //binop - cannot use binop dirctly as it is a i32 value and not a pointer
 						    }
+
 						    while(users.size())
 						    {
 						    	User *u = users.top();
