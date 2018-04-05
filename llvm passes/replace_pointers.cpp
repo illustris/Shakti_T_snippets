@@ -162,7 +162,7 @@ namespace {
 
 							op->setOperand(0,ptr);
 
-							errs()<<"\n*******\nModified load: "<<*op<<"\n********\n";
+							//errs()<<"\n*******\nModified load: "<<*op<<"\n********\n";
 
 							//LoadInst *safeload = new LoadInst(loadtype,ptr,"safe_load",op);
 
@@ -282,7 +282,7 @@ namespace {
 						}
 					}
 				}
-				errs()<<"===============================\n"<<F<<"\n===============================\n";
+				//errs()<<"===============================\n"<<F<<"\n===============================\n";
 			}
 
 			return modified;
