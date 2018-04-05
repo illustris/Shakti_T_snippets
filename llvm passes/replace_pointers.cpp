@@ -85,13 +85,94 @@ namespace {
 				FunctionType *craftFuncType = FunctionType::get(craftRetType, craftParamTypes, false);
 				Value *craftFunc = F.getParent()->getOrInsertFunction("craft", craftFuncType);
 				CallInst *st_hash;
-		
+
+				Module *m = F.getParent();
+				Function *val = Intrinsic::getDeclaration(m, Intrinsic::riscv_validate);	// get hash intrinsic declaration
+
 				for (auto &B : F) {
 					//for (auto &I : B) {
 					for(BasicBlock::iterator i = B.begin(), e = B.end(); i != e; ++i) {
 						Instruction *I = dyn_cast<Instruction>(i);
 
-						if (auto *op = dyn_cast<GetElementPtrInst>(I)) {
+						if (auto *op = dyn_cast<StoreInst>(I)) {
+							if(op->getOperand(1)->getType() != Type::getInt128Ty(Ctx))
+								continue;
+							modified = true;
+							TruncInst *tr_lo = new TruncInst(op->getOperand(1), Type::getInt64Ty(Ctx),"fpr_low", op);	// alloca stack cookie
+							Value* shamt = llvm::ConstantInt::get(Type::getInt128Ty(Ctx),64);
+							BinaryOperator *shifted =  BinaryOperator::Create(Instruction::LShr, op->getOperand(1), shamt , "fpr_hi_big", op);
+							TruncInst *tr_hi = new TruncInst(shifted, Type::getInt64Ty(Ctx),"fpr_hi", op);	// alloca stack cookie
+
+							// Set up intrinsic arguments
+							std::vector<Value *> args;
+
+							args.push_back(tr_hi);
+							args.push_back(tr_lo);
+							ArrayRef<Value *> args_ref(args);
+
+							// Create call to intrinsic
+							IRBuilder<> Builder(I);
+							Builder.SetInsertPoint(I);
+							Builder.CreateCall(val, args_ref,"");
+
+							Type *storetype = op->getOperand(0)->getType();//->getPointerElementType();
+							Type *storeptrtype = storetype->getPointerTo();
+
+							//errs()<<"\n*******\nStoretype: "<<*storeptrtype<<"\n********\n";
+
+							IntToPtrInst *ptr = new IntToPtrInst(tr_lo,storeptrtype,"ptr",op);
+
+							new StoreInst(op->getOperand(0),ptr,op);
+
+							--i;
+							op->dropAllReferences();
+						    op->removeFromParent();
+
+						}
+
+						else if (auto *op = dyn_cast<LoadInst>(I)) {
+							//errs()<<"\n*******\nOp0: "<<*op->getOperand(0)<<"\n********\n";
+							if(op->getOperand(0)->getType() != Type::getInt128Ty(Ctx))
+								continue;
+							modified = true;
+							TruncInst *tr_lo = new TruncInst(op->getOperand(0), Type::getInt64Ty(Ctx),"fpr_low", op);	// alloca stack cookie
+							Value* shamt = llvm::ConstantInt::get(Type::getInt128Ty(Ctx),64);
+							BinaryOperator *shifted =  BinaryOperator::Create(Instruction::LShr, op->getOperand(0), shamt , "fpr_hi_big", op);
+							TruncInst *tr_hi = new TruncInst(shifted, Type::getInt64Ty(Ctx),"fpr_hi", op);	// alloca stack cookie
+
+							// Set up intrinsic arguments
+							std::vector<Value *> args;
+
+							args.push_back(tr_hi);
+							args.push_back(tr_lo);
+							ArrayRef<Value *> args_ref(args);
+
+							// Create call to intrinsic
+							IRBuilder<> Builder(I);
+							Builder.SetInsertPoint(I);
+							Builder.CreateCall(val, args_ref,"");
+
+							Type *loadtype = op->getType();//->getType();//->getPointerElementType();
+							Type *loadptrtype = loadtype->getPointerTo();
+
+							//errs()<<"\n*******\nStoretype: "<<*storeptrtype<<"\n********\n";
+
+							IntToPtrInst *ptr = new IntToPtrInst(tr_lo,loadptrtype,"ptr",op);
+							//op->mutateType(Type::getIntNPtrTy(Ctx,128));
+
+							op->setOperand(0,ptr);
+
+							errs()<<"\n*******\nModified load: "<<*op<<"\n********\n";
+
+							//LoadInst *safeload = new LoadInst(loadtype,ptr,"safe_load",op);
+
+							//--i;
+							//op->dropAllReferences();
+						    //op->removeFromParent();
+
+						}
+
+						else if (auto *op = dyn_cast<GetElementPtrInst>(I)) {
 							modified=true;
 							Value *offset = resolveGetElementPtr(op,D,Ctx);
 							//errs()<<"\n***\nOFFSET: "<<*offset<<"\n*****\n";
